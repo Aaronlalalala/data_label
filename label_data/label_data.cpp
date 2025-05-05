@@ -12,6 +12,8 @@
 #include <codecvt>
 #include <locale>
 #include <fstream>
+#include <ShlObj.h>  
+#pragma comment(lib, "Shell32.lib")  
 
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -60,65 +62,23 @@ std::wstring GetOutputFileName() {
 using json = nlohmann::json;
 #include <filesystem>  // C++17 std::filesystem
 
-void CreateDirectoryIfNeeded(const std::wstring& directory) {
-    if (!std::filesystem::exists(directory)) {
-        std::filesystem::create_directories(directory);  // 創建資料夾
+bool CreateDirectoryIfNeeded(const std::wstring& directory) {
+    try {
+        // 檢查目錄是否已存在
+        if (std::filesystem::exists(directory)) {
+            return true; // 目錄已存在
+        }
+
+        // 嘗試創建目錄
+        return std::filesystem::create_directories(directory);
+    }
+    catch (const std::filesystem::filesystem_error& e) {
+        // 轉換錯誤訊息
+        std::string errorMsg = "無法創建目錄: " + std::string(e.what());
+        MessageBoxA(NULL, errorMsg.c_str(), "錯誤", MB_OK | MB_ICONERROR);
+        return false;
     }
 }
-
-void SaveAnnotations() {
-    // 設定儲存路徑
-    std::wstring outputDirectory = L"C:\\Users\\楊哲綸\\source\\repos\\label_data\\image\\Output\\";
-
-    // 確保目標資料夾存在
-    CreateDirectoryIfNeeded(outputDirectory);
-
-    // 取得檔案名稱（去除副檔名）
-    std::wstring outFile = GetOutputFileName();
-
-    // 使用 PathFindFileNameW 取得檔案名稱（去除路徑）
-    std::wstring imageNameW = PathFindFileNameW(imageFiles[currentImageIndex].c_str());
-
-    // 移除副檔名 ".jpg"
-    size_t pos = imageNameW.find_last_of(L".");
-    if (pos != std::wstring::npos) {
-        imageNameW = imageNameW.substr(0, pos);  // 去掉副檔名
-    }
-
-    // 產生 .json 檔案名稱
-    std::wstring jsonFileName = outputDirectory + imageNameW + L".json";
-    std::string outFileUtf8(jsonFileName.begin(), jsonFileName.end());  // 將 std::wstring 轉為 std::string
-
-    nlohmann::json jsonOutput;
-
-    // 放入圖片檔名
-    jsonOutput["image"] = std::string(imageNameW.begin(), imageNameW.end());
-
-    // 放入標註資料
-    for (const auto& ann : annotations) {
-        jsonOutput["annotations"].push_back({
-            {"x1", ann.x1},
-            {"y1", ann.y1},
-            {"x2", ann.x2},
-            {"y2", ann.y2}
-            });
-    }
-
-    // 確保檔案可以寫入
-    std::ofstream ofs(outFileUtf8);
-    if (!ofs.is_open()) {
-        MessageBox(NULL, L"無法開啟檔案！", L"錯誤", MB_OK);
-        return;
-    }
-
-    // 輸出 JSON
-    ofs << jsonOutput.dump(4);  // 格式化輸出，縮排4空格
-    ofs.close();
-
-    // 顯示成功訊息
-    MessageBox(NULL, L"已儲存標記至 JSON", L"儲存成功", MB_OK);
-}
-
 
 #include <Windows.h>
 
@@ -140,6 +100,101 @@ std::string wstring_to_utf8(const std::wstring& wstr) {
     return str;
 }
 
+void SaveAnnotations() {
+    try {
+        // 設定儲存路徑（改用用戶目錄或桌面，避免權限問題）
+        wchar_t userProfilePath[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_DESKTOP, NULL, 0, userProfilePath))) {
+            std::wstring outputDirectory = std::wstring(userProfilePath) + L"\\LabelOutput\\";
+
+            // 嘗試創建目錄並檢查是否成功
+            if (!CreateDirectoryIfNeeded(outputDirectory)) {
+                throw std::runtime_error("無法創建輸出目錄");
+            }
+
+            // 取得檔案名稱（去除副檔名）
+            std::wstring imageNameW = PathFindFileNameW(imageFiles[currentImageIndex].c_str());
+
+            // 移除副檔名
+            size_t pos = imageNameW.find_last_of(L".");
+            if (pos != std::wstring::npos) {
+                imageNameW = imageNameW.substr(0, pos);  // 去掉副檔名
+            }
+
+            // 產生 .json 檔案名稱
+            std::wstring jsonFileName = outputDirectory + imageNameW + L".json";
+
+            // 檢查檔案是否已存在且無法寫入
+            DWORD fileAttributes = GetFileAttributesW(jsonFileName.c_str());
+            if (fileAttributes != INVALID_FILE_ATTRIBUTES) {
+                if (fileAttributes & FILE_ATTRIBUTE_READONLY) {
+                    // 嘗試移除唯讀屬性
+                    SetFileAttributesW(jsonFileName.c_str(), fileAttributes & ~FILE_ATTRIBUTE_READONLY);
+                }
+            }
+
+            // 準備JSON數據
+            nlohmann::json jsonOutput;
+            jsonOutput["image"] = wstring_to_utf8(imageNameW);
+            for (const auto& ann : annotations) {
+                jsonOutput["annotations"].push_back({
+                    {"x1", ann.x1},
+                    {"y1", ann.y1},
+                    {"x2", ann.x2},
+                    {"y2", ann.y2}
+                    });
+            }
+
+            // 使用寬字符API直接打開文件，避免UTF-8轉換問題
+            HANDLE hFile = CreateFileW(
+                jsonFileName.c_str(),
+                GENERIC_WRITE,
+                0,
+                NULL,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL
+            );
+
+            if (hFile == INVALID_HANDLE_VALUE) {
+                DWORD error = GetLastError();
+                wchar_t errorMsg[256];
+                swprintf_s(errorMsg, L"無法開啟檔案：%s\n錯誤代碼: %d", jsonFileName.c_str(), error);
+                throw std::runtime_error(wstring_to_utf8(errorMsg));
+            }
+
+            // 將JSON轉換為字符串
+            std::string jsonStr = jsonOutput.dump(4);
+
+            // 寫入檔案
+            DWORD bytesWritten;
+            BOOL writeResult = WriteFile(
+                hFile,
+                jsonStr.c_str(),
+                static_cast<DWORD>(jsonStr.size()),
+                &bytesWritten,
+                NULL
+            );
+
+            // 關閉檔案句柄
+            CloseHandle(hFile);
+
+            if (!writeResult || bytesWritten != jsonStr.size()) {
+                throw std::runtime_error("寫入檔案時發生錯誤");
+            }
+
+            // 顯示成功訊息
+            std::wstring successMsg = L"已儲存標記至:\n" + jsonFileName;
+            MessageBoxW(NULL, successMsg.c_str(), L"儲存成功", MB_OK | MB_ICONINFORMATION);
+        }
+        else {
+            throw std::runtime_error("無法獲取桌面路徑");
+        }
+    }
+    catch (const std::exception& e) {
+        MessageBoxA(NULL, e.what(), "錯誤", MB_OK | MB_ICONERROR);
+    }
+}
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -368,7 +423,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case 'S':
         case 's':
             SaveAnnotations();
-            MessageBox(hWnd, L"標註已儲存！", L"提示", MB_OK);
+            /*MessageBox(hWnd, L"標註已儲存！", L"提示", MB_OK);*/
             break;
         case VK_RIGHT:
         case VK_DOWN:
