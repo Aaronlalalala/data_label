@@ -1,0 +1,15 @@
+# 忽略 Visual Studio 的檔案和資料夾
+.vs/
+.vscode/
+.idea/
+
+# 忽略編譯產物
+*.obj
+*.exe
+*.dll
+*.pdb
+*.log
+
+# 忽略系統檔案
+Thumbs.db
+.DS_Store

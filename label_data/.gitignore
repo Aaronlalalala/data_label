@@ -1,0 +1,10 @@
+# 忽略 Visual Studio 生成的檔案
+.vs/
+*.vspscc
+*.vssscc
+_ReSharper.Caches/
+.idea/
+*.user
+*.userosscache
+*.suo
+*.userprefs
