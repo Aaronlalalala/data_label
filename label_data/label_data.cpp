@@ -13,6 +13,8 @@
 #include <locale>
 #include <fstream>
 #include <ShlObj.h>  
+#include <iostream>
+
 #pragma comment(lib, "Shell32.lib")  
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -27,12 +29,18 @@ WCHAR szTitle[MAX_LOADSTRING];                  // 標題列文字
 WCHAR szWindowClass[MAX_LOADSTRING];            // 主視窗類別名稱
 const std::wstring IMAGE_DIRECTORY = L"..\\image\\Dogs";
 std::vector<std::wstring> imageFiles;
+
+std::vector<std::wstring> labels = { L"狗", L"雞", L"貓", L"鼠", L"兔" };
+int selectedLabelIndex = 0; // 預設
+
 int currentImageIndex = 0;
 Image* currentImage = nullptr;
 
 struct Annotation {
     int x1, y1, x2, y2;
+    std::wstring label;  
 };
+
 
 std::vector<Annotation> annotations;
 bool isDrawing = false;
@@ -98,7 +106,6 @@ std::string wstring_to_utf8(const std::wstring& wstr) {
     str.resize(size_needed - 1);  
     return str;
 }
-
 void SaveAnnotations() {
     try {
         // 設定儲存路徑（改用用戶目錄或桌面，避免權限問題）
@@ -117,22 +124,17 @@ void SaveAnnotations() {
             // 移除副檔名
             size_t pos = imageNameW.find_last_of(L".");
             if (pos != std::wstring::npos) {
-                imageNameW = imageNameW.substr(0, pos);  // 去掉副檔名
+                imageNameW = imageNameW.substr(0, pos); 
             }
 
-            // 產生 .json 檔案名稱
             std::wstring jsonFileName = outputDirectory + imageNameW + L".json";
-
-            // 檢查檔案是否已存在且無法寫入
             DWORD fileAttributes = GetFileAttributesW(jsonFileName.c_str());
             if (fileAttributes != INVALID_FILE_ATTRIBUTES) {
                 if (fileAttributes & FILE_ATTRIBUTE_READONLY) {
-                    // 嘗試移除唯讀屬性
                     SetFileAttributesW(jsonFileName.c_str(), fileAttributes & ~FILE_ATTRIBUTE_READONLY);
                 }
             }
 
-            // 準備JSON數據
             nlohmann::json jsonOutput;
             jsonOutput["image"] = wstring_to_utf8(imageNameW);
             for (const auto& ann : annotations) {
@@ -140,11 +142,11 @@ void SaveAnnotations() {
                     {"x1", ann.x1},
                     {"y1", ann.y1},
                     {"x2", ann.x2},
-                    {"y2", ann.y2}
+                    {"y2", ann.y2},
+                    {"label", ann.label}  
                     });
             }
 
-            // 使用寬字符API直接打開文件，避免UTF-8轉換問題
             HANDLE hFile = CreateFileW(
                 jsonFileName.c_str(),
                 GENERIC_WRITE,
@@ -162,10 +164,7 @@ void SaveAnnotations() {
                 throw std::runtime_error(wstring_to_utf8(errorMsg));
             }
 
-            // 將JSON轉換為字符串
             std::string jsonStr = jsonOutput.dump(4);
-
-            // 寫入檔案
             DWORD bytesWritten;
             BOOL writeResult = WriteFile(
                 hFile,
@@ -175,14 +174,12 @@ void SaveAnnotations() {
                 NULL
             );
 
-            // 關閉檔案句柄
             CloseHandle(hFile);
 
             if (!writeResult || bytesWritten != jsonStr.size()) {
                 throw std::runtime_error("寫入檔案時發生錯誤");
             }
 
-            // 顯示成功訊息
             std::wstring successMsg = L"已儲存標記至:\n" + jsonFileName;
             MessageBoxW(NULL, successMsg.c_str(), L"儲存成功", MB_OK | MB_ICONINFORMATION);
         }
@@ -194,6 +191,7 @@ void SaveAnnotations() {
         MessageBoxA(NULL, e.what(), "錯誤", MB_OK | MB_ICONERROR);
     }
 }
+
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -293,7 +291,6 @@ void LoadCurrentImage() {
     currentImage = new Image(imageFiles[currentImageIndex].c_str());
 }
 
-// 繪製圖片
 void DrawImage(HDC hdc, HWND hWnd) {
     if (!currentImage) return;
     Graphics graphics(hdc);
@@ -313,11 +310,17 @@ void DrawImage(HDC hdc, HWND hWnd) {
     Pen pen(Color(255, 255, 0, 0), 2);
     for (const auto& ann : annotations) {
         graphics.DrawRectangle(&pen, ann.x1, ann.y1, ann.x2 - ann.x1, ann.y2 - ann.y1);
+
+        SolidBrush brush(Color(255, 255, 0, 0));
+        Font font(L"Arial", 12);
+        PointF point((float)(ann.x1), (float)(ann.y1 - 20));
+        graphics.DrawString(std::wstring(ann.label.begin(), ann.label.end()).c_str(), -1, &font, point, &brush);
     }
     if (isDrawing) {
         graphics.DrawRectangle(&pen, (INT)startPoint.x, (INT)startPoint.y, (INT)(endPoint.x - startPoint.x), (INT)(endPoint.y - startPoint.y));
     }
 }
+
 
 //
 //  函式: MyRegisterClass()
@@ -369,6 +372,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
 //
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    int result = 0;
     switch (message) {
     case WM_COMMAND: {
         int wmId = LOWORD(wParam);
@@ -412,6 +416,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
     case WM_KEYDOWN:
+        
         switch (wParam) {
         case VK_DELETE:
             if (!annotations.empty()) {
@@ -419,10 +424,40 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 InvalidateRect(hWnd, NULL, TRUE);
             }
             break;
+        case 'L':
+        case 'l':
+            if (!annotations.empty()) {
+                // 顯示類別選擇
+                int choice;
+                std::cout << "請選擇標註類別:\n";
+                for (int i = 0; i < labels.size(); ++i) {
+                    std::wcout << i + 1 << ". " << labels[i] << "\n";  
+                }
+                std::cout << "選擇 (1-" << labels.size() << "): ";
+                std::cin >> choice;
+
+                int index = choice - 1;
+
+                if (index >= 0 && index < labels.size()) {
+                    Annotation& lastAnnotation = annotations.back();
+                    lastAnnotation.label = labels[index];  
+                }
+                else {
+                    std::cout << "無效的選擇。\n";
+                }
+            }
+            break;
         case 'S':
         case 's':
             SaveAnnotations();
-            /*MessageBox(hWnd, L"標註已儲存！", L"提示", MB_OK);*/
+            break;
+        case 'D':
+        case 'd':
+            result = MessageBoxW(hWnd, L"確定要刪除目前標註嗎?", L"刪除標註", MB_YESNO | MB_ICONQUESTION);
+            if (result == IDYES) {
+                annotations.clear();  
+                InvalidateRect(hWnd, NULL, TRUE);  
+            }
             break;
         case VK_RIGHT:
         case VK_DOWN:
@@ -438,6 +473,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             break;
         }
         break;
+
 
     case WM_DESTROY:
         PostQuitMessage(0);
