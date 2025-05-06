@@ -14,7 +14,6 @@
 #include <fstream>
 #include <ShlObj.h>  
 #pragma comment(lib, "Shell32.lib")  
-
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Shlwapi.lib")
 
@@ -26,7 +25,7 @@ using namespace Gdiplus;
 HINSTANCE hInst;                                // 目前執行個體
 WCHAR szTitle[MAX_LOADSTRING];                  // 標題列文字
 WCHAR szWindowClass[MAX_LOADSTRING];            // 主視窗類別名稱
-const std::wstring IMAGE_DIRECTORY = L"C:\\Users\\楊哲綸\\source\\repos\\label_data\\image\\Dogs";
+const std::wstring IMAGE_DIRECTORY = L"..\\image\\Dogs";
 std::vector<std::wstring> imageFiles;
 int currentImageIndex = 0;
 Image* currentImage = nullptr;

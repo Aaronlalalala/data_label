@@ -8,3 +8,17 @@ _ReSharper.Caches/
 *.userosscache
 *.suo
 *.userprefs
+# Build output
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.log
+*.exe
+*.dll
+*.lib
+*.exp
